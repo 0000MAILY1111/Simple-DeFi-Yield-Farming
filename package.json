@@ -1,0 +1,33 @@
+{
+  "name": "token-farm-defi",
+  "version": "1.0.0",
+  "description": "Simple DeFi Token Farm with LP staking and DAPP rewards",
+  "main": "index.js",
+  "scripts": {
+    "compile": "npx hardhat compile",
+    "test": "npx hardhat test",
+    "node": "npx hardhat node",
+    "deploy": "npx hardhat run scripts/deploy.js --network localhost",
+    "deploy:hardhat": "npx hardhat run scripts/deploy.js --network hardhat",
+    "clean": "npx hardhat clean",
+    "coverage": "npx hardhat coverage"
+  },
+  "keywords": [
+    "defi",
+    "staking",
+    "farming",
+    "ethereum",
+    "hardhat",
+    "solidity"
+  ],
+  "author": "ValdezMai",
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "hardhat": "^2.19.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.0",
+    "dotenv": "^16.3.1"
+  }
+}
