@@ -1,0 +1,43 @@
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Hardhat build outputs
+artifacts/
+cache/
+typechain/
+coverage/
+coverage.json
+
+# Logs
+logs/
+*.log
+
+# Environment variables (⚠️ aquí guardas tus claves privadas, API keys y redes)
+.env
+.env.local
+.env.*.local
+
+# Configuraciones sensibles
+secrets.json
+keys.json
+private-keys.json
+wallets.json
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# Remix / Web3 generated files
+remix-*
+*.swp
+
+# Other
+*.pid

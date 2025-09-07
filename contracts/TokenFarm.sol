@@ -1,207 +1,227 @@
+///sepolia 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
-import "./DappToken.sol";
-import "./LPToken.sol";
-
 /**
-* @title Proportional Token Farm
-* @notice Una granja de staking donde las recompensas se distribuyen proporcionalmente al total stakeado.
-*/
+ * @title TokenFarm
+ * @notice Contrato de farming DeFi completamente autónomo sin dependencias externas
+ */
 contract TokenFarm {
-    //
-    // Variables de estado
-    //
+    // Variables de estado principales
     string public name = "Proportional Token Farm";
     address public owner;
-    DAppToken public dappToken;
-    LPToken public lpToken;
     
-    uint256 public constant REWARD_PER_BLOCK = 1e18; // Recompensa por bloque (total para todos los usuarios)
-    uint256 public totalStakingBalance; // Total de tokens en staking
+    // Direcciones de los contratos de tokens
+    address public dappTokenAddress;
+    address public lpTokenAddress;
+    
+    // Configuración de recompensas
+    uint256 public constant REWARD_PER_BLOCK = 1e18; // 1 token por bloque total
+    uint256 public totalStakingBalance; // Total de tokens LP en staking
+    
+    // Arrays y mappings para rastrear usuarios
     address[] public stakers;
     
-    mapping(address => uint256) public stakingBalance;
-    mapping(address => uint256) public checkpoints;
-    mapping(address => uint256) public pendingRewards;
-    mapping(address => bool) public hasStaked;
-    mapping(address => bool) public isStaking;
+    mapping(address => uint256) public stakingBalance;    // Balance en staking por usuario
+    mapping(address => uint256) public checkpoints;      // Último bloque calculado por usuario
+    mapping(address => uint256) public pendingRewards;   // Recompensas pendientes por usuario
+    mapping(address => bool) public hasStaked;           // Si el usuario ha hecho staking alguna vez
+    mapping(address => bool) public isStaking;           // Si el usuario está actualmente en staking
 
-    // Eventos
-    event Deposit(address indexed user, uint256 amount);
-    event Withdraw(address indexed user, uint256 amount);
-    event RewardsClaimed(address indexed user, uint256 amount);
-    event RewardsDistributed();
+    // Eventos del sistema
+    event Deposit(address indexed usuario, uint256 cantidad);
+    event Withdraw(address indexed usuario, uint256 cantidad);
+    event RewardsClaimed(address indexed usuario, uint256 cantidad);
+    event RewardsDistributed(uint256 totalUsuarios);
+
+    // Modifiers de seguridad
+    modifier soloOwner() {
+        require(msg.sender == owner, "Solo el propietario puede ejecutar esta funcion");
+        _;
+    }
+    
+    modifier usuarioEnStaking() {
+        require(isStaking[msg.sender], "El usuario no esta haciendo staking");
+        _;
+    }
 
     // Constructor
-    constructor(DAppToken _dappToken, LPToken _lpToken) {
-        // Configurar las instancias de los contratos de DappToken y LPToken.
-        dappToken = _dappToken;
-        lpToken = _lpToken;
-        // Configurar al owner del contrato como el creador de este contrato.
+    constructor(address _dappToken, address _lpToken) {
+        require(_dappToken != address(0), "Direccion de DappToken invalida");
+        require(_lpToken != address(0), "Direccion de LPToken invalida");
+        
+        dappTokenAddress = _dappToken;
+        lpTokenAddress = _lpToken;
         owner = msg.sender;
     }
 
     /**
-    * @notice Deposita tokens LP para staking.
-    * @param _amount Cantidad de tokens LP a depositar.
-    */
+     * @notice Deposita tokens LP para hacer staking
+     * @param _amount Cantidad de tokens LP a depositar
+     */
     function deposit(uint256 _amount) external {
-        // Verificar que _amount sea mayor a 0.
-        require(_amount > 0, "Amount must be greater than 0");
+        require(_amount > 0, "La cantidad debe ser mayor a 0");
         
-        // Transferir tokens LP del usuario a este contrato.
-        lpToken.transferFrom(msg.sender, address(this), _amount);
+        // Llamar al contrato LP Token para transferir
+        (bool success, ) = lpTokenAddress.call(
+            abi.encodeWithSignature("transferFrom(address,address,uint256)", msg.sender, address(this), _amount)
+        );
+        require(success, "Transferencia de LP tokens fallida");
         
-        // Actualizar el balance de staking del usuario en stakingBalance.
+        // Si el usuario ya está en staking, actualizar recompensas primero
+        if (isStaking[msg.sender]) {
+            distributeRewards(msg.sender);
+        }
+        
+        // Actualizar balances
         stakingBalance[msg.sender] += _amount;
-        
-        // Incrementar totalStakingBalance con _amount.
         totalStakingBalance += _amount;
         
-        // Si el usuario nunca ha hecho staking antes, agregarlo al array stakers y marcar hasStaked como true.
+        // Agregar a la lista de stakers si es primera vez
         if (!hasStaked[msg.sender]) {
             stakers.push(msg.sender);
             hasStaked[msg.sender] = true;
         }
         
-        // Actualizar isStaking del usuario a true.
+        // Marcar como activo en staking
         isStaking[msg.sender] = true;
         
-        // Si checkpoints del usuario está vacío, inicializarlo con el número de bloque actual.
-        if (checkpoints[msg.sender] == 0) {
-            checkpoints[msg.sender] = block.number;
-        }
+        // Establecer checkpoint
+        checkpoints[msg.sender] = block.number;
         
-        // Llamar a distributeRewards para calcular y actualizar las recompensas pendientes.
-        distributeRewards(msg.sender);
-        
-        // Emitir un evento de depósito.
         emit Deposit(msg.sender, _amount);
     }
 
     /**
-    * @notice Retira todos los tokens LP en staking.
-    */
-    function withdraw() external {
-        // Verificar que el usuario está haciendo staking (isStaking == true).
-        require(isStaking[msg.sender], "User is not staking");
-        
-        // Obtener el balance de staking del usuario.
+     * @notice Retira todos los tokens LP del staking
+     */
+    function withdraw() external usuarioEnStaking {
         uint256 balance = stakingBalance[msg.sender];
+        require(balance > 0, "No hay tokens para retirar");
         
-        // Verificar que el balance de staking sea mayor a 0.
-        require(balance > 0, "Staking balance is 0");
-        
-        // Llamar a distributeRewards para calcular y actualizar las recompensas pendientes antes de restablecer el balance.
+        // Actualizar recompensas antes del retiro
         distributeRewards(msg.sender);
         
-        // Restablecer stakingBalance del usuario a 0.
+        // Actualizar estados
         stakingBalance[msg.sender] = 0;
-        
-        // Reducir totalStakingBalance en el balance que se está retirando.
         totalStakingBalance -= balance;
-        
-        // Actualizar isStaking del usuario a false.
         isStaking[msg.sender] = false;
         
-        // Transferir los tokens LP de vuelta al usuario.
-        lpToken.transfer(msg.sender, balance);
+        // Transferir tokens LP de vuelta al usuario
+        (bool success, ) = lpTokenAddress.call(
+            abi.encodeWithSignature("transfer(address,uint256)", msg.sender, balance)
+        );
+        require(success, "Transferencia de LP tokens fallida");
         
-        // Emitir un evento de retiro.
         emit Withdraw(msg.sender, balance);
     }
 
     /**
-    * @notice Reclama recompensas pendientes.
-    */
+     * @notice Reclama todas las recompensas pendientes
+     */
     function claimRewards() external {
-        // Obtener el monto de recompensas pendientes del usuario desde pendingRewards.
+        // Actualizar recompensas si está en staking
+        if (isStaking[msg.sender]) {
+            distributeRewards(msg.sender);
+        }
+        
         uint256 pendingAmount = pendingRewards[msg.sender];
+        require(pendingAmount > 0, "No hay recompensas pendientes");
         
-        // Verificar que el monto de recompensas pendientes sea mayor a 0.
-        require(pendingAmount > 0, "No pending rewards");
-        
-        // Restablecer las recompensas pendientes del usuario a 0.
+        // Resetear recompensas pendientes
         pendingRewards[msg.sender] = 0;
         
-        // Llamar a la función de acuñación (mint) en el contrato DappToken para transferir las recompensas al usuario.
-        dappToken.mint(msg.sender, pendingAmount);
+        // Mintear tokens DAPP como recompensa
+        (bool success, ) = dappTokenAddress.call(
+            abi.encodeWithSignature("mint(address,uint256)", msg.sender, pendingAmount)
+        );
+        require(success, "Minteo de recompensas fallido");
         
-        // Emitir un evento de reclamo de recompensas.
         emit RewardsClaimed(msg.sender, pendingAmount);
     }
 
     /**
-    * @notice Distribuye recompensas a todos los usuarios en staking.
-    */
-    function distributeRewardsAll() external {
-        // Verificar que la llamada sea realizada por el owner.
-        require(msg.sender == owner, "Only owner can call this function");
+     * @notice Distribuye recompensas a todos los usuarios activos (solo owner)
+     */
+    function distributeRewardsAll() external soloOwner {
+        uint256 usuariosActualizados = 0;
         
-        // Iterar sobre todos los usuarios en staking almacenados en el array stakers.
         for (uint256 i = 0; i < stakers.length; i++) {
             address staker = stakers[i];
-            // Para cada usuario, si están haciendo staking (isStaking == true), llamar a distributeRewards.
             if (isStaking[staker]) {
                 distributeRewards(staker);
+                usuariosActualizados++;
             }
         }
         
-        // Emitir un evento indicando que las recompensas han sido distribuidas.
-        emit RewardsDistributed();
+        emit RewardsDistributed(usuariosActualizados);
     }
 
+    /**
+     * @notice Calcula y actualiza las recompensas de un usuario específico
+     * @param beneficiary Dirección del usuario para calcular recompensas
+     */
     function distributeRewards(address beneficiary) private {
-        // Obtener el último checkpoint del usuario desde checkpoints.
         uint256 lastCheckpoint = checkpoints[beneficiary];
         
-        // Verificar que el número de bloque actual sea mayor al checkpoint y que totalStakingBalance sea mayor a 0.
-        if (block.number <= lastCheckpoint || totalStakingBalance == 0) {
+        // Verificar condiciones para calcular recompensas
+        if (block.number <= lastCheckpoint || totalStakingBalance == 0 || stakingBalance[beneficiary] == 0) {
             return;
         }
         
-        // Calcular la cantidad de bloques transcurridos desde el último checkpoint.
+        // Calcular bloques transcurridos
         uint256 blocksPassed = block.number - lastCheckpoint;
         
-        // Calcular la proporción del staking del usuario en relación al total staking (stakingBalance[beneficiary] / totalStakingBalance).
-        uint256 userStake = stakingBalance[beneficiary];
-        if (userStake == 0) {
-            checkpoints[beneficiary] = block.number;
-            return;
-        }
+        // Calcular proporción del usuario (con precisión)
+        uint256 userShare = (stakingBalance[beneficiary] * 1e18) / totalStakingBalance;
         
-        // Para evitar problemas de precisión, multiplicamos por 1e18 antes de dividir
-        uint256 share = (userStake * 1e18) / totalStakingBalance;
+        // Calcular recompensas del usuario
+        uint256 userReward = (REWARD_PER_BLOCK * blocksPassed * userShare) / 1e18;
         
-        // Calcular las recompensas del usuario multiplicando la proporción por REWARD_PER_BLOCK y los bloques transcurridos.
-        uint256 rewards = (REWARD_PER_BLOCK * blocksPassed * share) / 1e18;
-        
-        // Actualizar las recompensas pendientes del usuario en pendingRewards.
-        pendingRewards[beneficiary] += rewards;
-        
-        // Actualizar el checkpoint del usuario al bloque actual.
+        // Actualizar recompensas pendientes y checkpoint
+        pendingRewards[beneficiary] += userReward;
         checkpoints[beneficiary] = block.number;
     }
 
-    // Funciones adicionales útiles para consultas
-    function getUserInfo(address user) external view returns (
-        uint256 _stakingBalance,
-        uint256 _pendingRewards,
-        bool _hasStaked,
-        bool _isStaking,
-        uint256 _checkpoint
-    ) {
-        return (
-            stakingBalance[user],
-            pendingRewards[user],
-            hasStaked[user],
-            isStaking[user],
-            checkpoints[user]
-        );
-    }
-
+    // Funciones de vista para consultar estado
     function getStakersCount() external view returns (uint256) {
         return stakers.length;
+    }
+    
+    function getUserInfo(address usuario) external view returns (
+        uint256 balanceStaking,
+        uint256 recompensasPendientes,
+        bool estaHaciendoStaking,
+        bool haHechoStaking
+    ) {
+        return (
+            stakingBalance[usuario],
+            pendingRewards[usuario],
+            isStaking[usuario],
+            hasStaked[usuario]
+        );
+    }
+    
+    function calculatePendingRewards(address usuario) external view returns (uint256) {
+        if (!isStaking[usuario] || totalStakingBalance == 0 || stakingBalance[usuario] == 0) {
+            return pendingRewards[usuario];
+        }
+        
+        uint256 lastCheckpoint = checkpoints[usuario];
+        if (block.number <= lastCheckpoint) {
+            return pendingRewards[usuario];
+        }
+        
+        uint256 blocksPassed = block.number - lastCheckpoint;
+        uint256 userShare = (stakingBalance[usuario] * 1e18) / totalStakingBalance;
+        uint256 newReward = (REWARD_PER_BLOCK * blocksPassed * userShare) / 1e18;
+        
+        return pendingRewards[usuario] + newReward;
+    }
+    
+    // Función administrativa
+    function transferOwnership(address newOwner) external soloOwner {
+        require(newOwner != address(0), "Nuevo propietario no puede ser direccion cero");
+        owner = newOwner;
     }
 }
